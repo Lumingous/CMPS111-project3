@@ -70,6 +70,7 @@ static bool load(const char *cmdline, void (**eip) (void), void **esp);
  * aligned with the stack pointer ESP. Should only be called after the ELF 
  * format binary has been loaded into the heap by load();
  */
+
 static void
 push_command(char *filename, char** save_ptr, void **esp)
 {
@@ -176,8 +177,8 @@ process_execute(const char *cmdline)
 
     // Create a Kernel Thread for the new process
     tid = thread_create(file_name, PRI_DEFAULT, start_process, cmdline_copy);
-
-    timer_msleep(10);
+    semaphore_down(&thread_current()->child_lock);
+   // timer_msleep(10);
 
     return tid;
 }
@@ -199,6 +200,10 @@ start_process(void *cmdline)
     pif.cs = SEL_UCSEG;
     pif.eflags = FLAG_IF | FLAG_MBS;
     /*changed*/
+    char*  cmdline_copy = NULL;
+    cmdline_copy=palloc_get_page(0);
+    strlcpy(cmdline_copy, cmdline, PGSIZE);
+
     char *file_name, *save_ptr;
     file_name = strtok_r((char *) cmdline, " ", &save_ptr);
     success = load(file_name, &pif.eip, &pif.esp);
@@ -206,14 +211,17 @@ start_process(void *cmdline)
     /*changed finish*/
     if (success) {
         //        push_command(syn->cmdline, &pif.esp);
+     //   push_command2(cmdline_copy, &pif.esp);
         push_command(file_name, &save_ptr, &pif.esp);
     }
     palloc_free_page(cmdline);
 
     if (!success) {
+        semaphore_up(&thread_current()->parent->child_lock);
         thread_exit();
     }
 
+        semaphore_up(&thread_current()->parent->child_lock);
     // Start the user process by simulating a return from an
     // interrupt, implemented by intr_exit (in threads/intr-stubs.S).  
     // Because intr_exit takes all of its arguments on the stack in 
@@ -235,6 +243,24 @@ start_process(void *cmdline)
 int
 process_wait(tid_t child_tid UNUSED)
 {
+    struct list_elem *e;
+    for (e = list_begin (&thread_current()->child_proc); 
+         e != list_end (&thread_current()->child_proc); 
+         e = list_next (e))
+    {
+        struct child *temp=list_entry(e,struct child,elem);
+        if(temp->tid==child_tid)
+        {
+            thread_current()->waitingon=temp->tid;
+            if(!temp->used)
+            {
+                semaphore_down(&thread_current()->child_lock);
+            }
+            int temp2=temp->exit_error;
+            list_remove(e);
+            return temp2;
+        }
+    }
     return -1;
 }
 

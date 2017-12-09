@@ -1,35 +1,3 @@
-/* 
- * This file is derived from source code for the Pintos
- * instructional operating system which is itself derived
- * from the Nachos instructional operating system. The 
- * Nachos copyright notice is reproduced in full below. 
- *
- * Copyright (C) 1992-1996 The Regents of the University of California.
- * All rights reserved.
- *
- * Permission to use, copy, modify, and distribute this software
- * and its documentation for any purpose, without fee, and
- * without written agreement is hereby granted, provided that the
- * above copyright notice and the following two paragraphs appear
- * in all copies of this software.
- *
- * IN NO EVENT SHALL THE UNIVERSITY OF CALIFORNIA BE LIABLE TO
- * ANY PARTY FOR DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR
- * CONSEQUENTIAL DAMAGES ARISING OUT OF THE USE OF THIS SOFTWARE
- * AND ITS DOCUMENTATION, EVEN IF THE UNIVERSITY OF CALIFORNIA
- * HAS BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * THE UNIVERSITY OF CALIFORNIA SPECIFICALLY DISCLAIMS ANY
- * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS ON AN "AS IS"
- * BASIS, AND THE UNIVERSITY OF CALIFORNIA HAS NO OBLIGATION TO
- * PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR
- * MODIFICATIONS.
- *
- * Modifications Copyright (C) 2017 David C. Harrison. All rights reserved.
- */
-
 #include <stdio.h>
 #include <syscall-nr.h>
 #include <list.h>
@@ -68,6 +36,7 @@ static void remove_handler(struct intr_frame *);
 static void filesize_handler(struct intr_frame *);
 static void open_handler(struct intr_frame *);
 static void close_handler(struct intr_frame *);
+static void wait_handler(struct intr_frame *);
 
 void
 syscall_init(void)
@@ -105,10 +74,7 @@ syscall_handler(struct intr_frame *f)
         case SYS_CREATE:
             create_handler(f);
             break;
-            //        case SYS_REMOVE:
-            //            remove_handler(f);
-            //            break;
-            //
+
         case SYS_OPEN:
             open_handler(f);
             break;
@@ -116,9 +82,12 @@ syscall_handler(struct intr_frame *f)
             close_handler(f);
             break;
             //            
-            //        case SYS_EXEC:
-            //            exec_handler(f);
-            //            break;
+        case SYS_EXEC:
+            exec_handler(f);
+            break;
+        case SYS_WAIT:
+            wait_handler(f);
+            break;
         case SYS_FILESIZE:
             filesize_handler(f);
             break;
@@ -129,23 +98,12 @@ syscall_handler(struct intr_frame *f)
     }
 }
 
-/****************** System Call Implementations ********************/
-
-// *****************************************************************
-// CMPS111 Lab 3 : Put your new system call implementatons in your 
-// own source file. Define them in your header file and include 
-// that .h in this .c file.
-// *****************************************************************
-
 void sys_exit(int status)
 {
     printf("%s: exit(%d)\n", thread_current()->name, status);
     thread_exit();
 }
 
-/*
- * BUFFER+0 and BUFFER+size should be valid user adresses
- */
 static uint32_t sys_write(int fd, const void *buffer, unsigned size)
 {
     umem_check((const uint8_t*) buffer);
@@ -271,23 +229,20 @@ static void close_handler(struct intr_frame *f)
     }
 }
 
-static void search_thread(struct thread *t, tid_t tid)
+static void exec_handler(struct intr_frame *f)
 {
-    if (t->tid == tid) {
-        
-    }
-}
+    const char *file;
+    umem_read(f->esp+4,&file,sizeof(file));
+    //printf("%u wants to execute %s\n",thread_current()->tid,file);
 
-static void exec_handler(struct intr_frame * f)
+    f->eax=process_execute(file);
+}
+static void wait_handler(struct intr_frame *f)
 {
-    char* cmd;
-    umem_read(f->esp + 4, &cmd, sizeof (cmd));
-    tid_t tid = -1;
-    tid = process_execute(cmd);
-    f->eax = tid;
-    thread_foreach(search_thread, tid);
+    int pid;
+    umem_read(f->esp+4,&pid,sizeof(pid));
+    f->eax=process_wait(pid);
 }
-
 static void filesize_handler(struct intr_frame *f)
 {
     int fd;
@@ -302,9 +257,27 @@ static void filesize_handler(struct intr_frame *f)
 static void exit_handler(struct intr_frame *f)
 {
     int exitcode;
-    umem_read(f->esp + 4, &exitcode, sizeof (exitcode));
-
-    sys_exit(exitcode);
+  umem_read(f->esp + 4, &exitcode, sizeof(exitcode));
+  //printf("tid=%u wants to exit, parents=%u\n",thread_current()->tid,thread_current()->parent->tid);
+  struct list_elem *e;
+  struct list *temp=&thread_current()->parent->child_proc;
+  
+  for(e=list_begin(temp);e!=list_end(temp);e=list_next(e))
+  {
+      struct child *f=list_entry(e,struct child ,elem);
+      if(f->tid=thread_current()->tid)
+      {
+          f->used=true;
+          f->exit_error=exitcode;
+      }
+  }
+  
+  thread_current()->exit_error=exitcode;
+  if(thread_current()->parent->waitingon==thread_current()->tid)
+  {
+      semaphore_up(&thread_current()->parent->child_lock);
+  }
+  sys_exit(exitcode);
 }
 
 static struct fd_entry* fd_entry_get(int fd)

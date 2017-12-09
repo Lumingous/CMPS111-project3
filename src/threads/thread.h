@@ -36,7 +36,7 @@
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
-
+#include "threads/semaphore.h"
 #ifdef VM
 #include "vm/page.h"
 #endif
@@ -119,8 +119,21 @@ typedef int tid_t;
 //   ready state is on the run queue, whereas only a thread in the
 //   blocked state is on a semaphore wait list. 
 */
+struct child 
+{
+    int tid;
+    struct list_elem elem;
+    int exit_error;
+    bool used;
+};
 struct thread
   {
+    struct list child_proc;
+    struct thread *parent;
+    struct semaphore child_lock;
+    int waitingon;
+    int exit_error;
+
     // Owned by thread.c. 
     tid_t tid;                  // Thread identifier
     enum thread_status status;  // Thread state
@@ -137,8 +150,6 @@ struct thread
     // Owned by userprog/process.c. 
     struct list fd_table;
     int fd_count;
-    
-    struct list children;
     
     uint32_t *pagedir;     // Pointer to the page directory
     uint8_t *current_esp;  // "Executable Stack Pointer" 
